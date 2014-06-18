@@ -3,116 +3,89 @@ package main
 import (
 	"os"
 	"os/exec"
-	"os/user"
 	"testing"
 )
 
 func TestCliAddTask(t *testing.T) {
-	user, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	filename := user.HomeDir + "/tasks"
-	var file *os.File
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		os.Rename(filename, filename+".bak")
-		defer os.Rename(filename+".bak", filename)
-	}
-	defer file.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", "t.go", "foo")
-	err = cmd.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	listCmd := exec.Command("go", "run", "t.go")
-	out, err := listCmd.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	outString := string(out)
-	expected := "0 - foo\n"
-	if outString != expected {
-		t.Fatalf("Expected output to be '%s', got '%s'", expected, outString)
-	}
+	withCliSetup(t, func() {
+		cmd := exec.Command("go", "run", "t.go", "foo")
+		err := cmd.Run()
+		if err != nil {
+			t.Fatal(err)
+		}
+		listCmd := exec.Command("go", "run", "t.go")
+		out, err := listCmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		outString := string(out)
+		expected := "0 - foo\n"
+		if outString != expected {
+			t.Fatalf("Expected output to be '%s', got '%s'", expected, outString)
+		}
+	})
 }
 
 func TestCliFinishTask(t *testing.T) {
-	user, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	filename := user.HomeDir + "/tasks"
-	var file *os.File
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		os.Rename(filename, filename+".bak")
-		defer os.Rename(filename+".bak", filename)
-	}
-	defer file.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", "t.go", "foo")
-	err = cmd.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	finishCmd := exec.Command("go", "run", "t.go", "-f", "0")
-	err = finishCmd.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	listCmd := exec.Command("go", "run", "t.go")
-	out, err := listCmd.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	outString := string(out)
-	if outString != "" {
-		t.Fatalf("Expected output to be '', got '%s'", outString)
-	}
+	withCliSetup(t, func() {
+		cmd := exec.Command("go", "run", "t.go", "foo")
+		err := cmd.Run()
+		if err != nil {
+			t.Fatal(err)
+		}
+		finishCmd := exec.Command("go", "run", "t.go", "-f", "0")
+		err = finishCmd.Run()
+		if err != nil {
+			t.Fatal(err)
+		}
+		listCmd := exec.Command("go", "run", "t.go")
+		out, err := listCmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		outString := string(out)
+		if outString != "" {
+			t.Fatalf("Expected output to be '', got '%s'", outString)
+		}
+	})
 }
 
 func TestCliEditTask(t *testing.T) {
-	user, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	filename := user.HomeDir + "/tasks"
-	var file *os.File
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		os.Rename(filename, filename+".bak")
-		defer os.Rename(filename+".bak", filename)
-	}
-	defer file.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	withCliSetup(t, func() {
+		cmd := exec.Command("go", "run", "t.go", "foo")
+		err := cmd.Run()
+		if err != nil {
+			t.Fatal(err)
+		}
+		editCmd := exec.Command("go", "run", "t.go", "-e", "0", "bar")
+		err = editCmd.Run()
+		if err != nil {
+			t.Fatal(err)
+		}
+		listCmd := exec.Command("go", "run", "t.go")
+		out, err := listCmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		outString := string(out)
+		expected := "0 - bar\n"
+		if outString != expected {
+			t.Fatalf("Expected output to be '%s', got '%s'", expected, outString)
+		}
+	})
+}
 
-	cmd := exec.Command("go", "run", "t.go", "foo")
-	err = cmd.Run()
+func withCliSetup(t *testing.T, testFunc func()) {
+	origTaskFilePath := os.Getenv("T_TASKS_FILE")
+	err := os.Setenv("T_TASKS_FILE", "/tmp/tasks")
 	if err != nil {
 		t.Fatal(err)
 	}
-	editCmd := exec.Command("go", "run", "t.go", "-e", "0", "bar")
-	err = editCmd.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	listCmd := exec.Command("go", "run", "t.go")
-	out, err := listCmd.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	outString := string(out)
-	expected := "0 - bar\n"
-	if outString != expected {
-		t.Fatalf("Expected output to be '%s', got '%s'", expected, outString)
-	}
+	defer func() {
+		os.Remove("/tmp/tasks")
+		os.Setenv("T_TASKS_FILE", origTaskFilePath)
+	}()
+	testFunc()
 }
 
 func TestAddTask(t *testing.T) {

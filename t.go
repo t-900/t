@@ -103,14 +103,16 @@ func (t *TaskList) UnmarshalText(text []byte) error {
 }
 
 var tasklist *TaskList
+var taskFilePath string
 
 func main() {
 	tasklist = &(TaskList{})
-	user, err := user.Current()
+	var err error
+	taskFilePath, err = getTaskFilePath()
 	if err != nil {
 		fmt.Print(err.Error())
 	}
-	file, err := os.Open(user.HomeDir + "/tasks")
+	file, err := os.Open(taskFilePath)
 	defer file.Close()
 	if file != nil {
 		taskBytes, err := ioutil.ReadAll(file)
@@ -153,19 +155,28 @@ func main() {
 		if err != nil {
 			fmt.Print(err.Error())
 		}
+	} else {
+		fmt.Println("NOTHING TO DO?!?")
 	}
 }
 
 func write(tasklist *TaskList) error {
-	user, err := user.Current()
-	if err != nil {
-		return err
-	}
-	filename := user.HomeDir + "/tasks"
 	marshaledList, _ := tasklist.MarshalText()
-	err = ioutil.WriteFile(filename, marshaledList, 0755)
+	err := ioutil.WriteFile(taskFilePath, marshaledList, 0755)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func getTaskFilePath() (string, error) {
+	tasksFilePath := os.Getenv("T_TASKS_FILE")
+	if tasksFilePath == "" {
+		user, err := user.Current()
+		if err != nil {
+			return "", nil
+		}
+		tasksFilePath = user.HomeDir + "/tasks"
+	}
+	return tasksFilePath, nil
 }
