@@ -1,182 +1,485 @@
 package main
 
 import (
-	"errors"
+	"crypto/sha1"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
-	"os/user"
+	"path"
+	"regexp"
 	"sort"
 	"strings"
-	"time"
 )
 
-type Task struct {
-	description string
-	updated     time.Time
+// Raised when the path to a task file already exists as a directory.
+var InvalidTaskfile string = "Invalid task file: '%s'"
+
+// Raised when trying to use a prefix that could identify multiple tasks.
+type AmbiguousPrefixError struct {
+	prefix string
 }
 
-type TaskList struct {
-	tasks []*Task
+func (e *AmbiguousPrefixError) Error() string {
+	return "Ambiguous Prefix '" + e.prefix + "'"
 }
 
-func (t *TaskList) Len() int {
-	return len(t.tasks)
+func NewAmbiguousPrefixError(prefix string) *AmbiguousPrefixError {
+	return &AmbiguousPrefixError{prefix}
 }
 
-func (t *TaskList) Less(i, j int) bool {
-	return t.tasks[i].updated.After(t.tasks[j].updated)
+// Raised when trying to use a prefix that does not match any tasks.
+type UnknownPrefixError struct {
+	prefix string
 }
 
-func (t *TaskList) Swap(i, j int) {
-	iVal := t.tasks[i]
-	t.tasks[i] = t.tasks[j]
-	t.tasks[j] = iVal
+func (e *UnknownPrefixError) Error() string {
+	return "Unknown Prefix '" + e.prefix + "'"
 }
 
-func (t *TaskList) Add(taskDescription string) {
-	if t.tasks == nil {
-		t.tasks = make([]*Task, 0)
-	}
-	task := Task{description: taskDescription, updated: time.Now()}
-	t.tasks = append(t.tasks, &task)
+func NewUnknownPrefixError(prefix string) *UnknownPrefixError {
+	return &UnknownPrefixError{prefix}
 }
 
-func (t *TaskList) List() []string {
-	sort.Sort(t)
-	list := make([]string, 0)
-	for i, task := range t.tasks {
-		list = append(list, fmt.Sprintf("%d - %s", i, task.description))
-	}
-	return list
+// Return a hash of the given text for use as an id.
+// Currently SHA1 hashing is used.  It should be plenty for our purposes.
+func hash(text string) string {
+	hash := sha1.New()
+	io.WriteString(hash, text)
+	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
-func (t *TaskList) Finish(taskId int) error {
-	if t.tasks == nil {
-		return errors.New("No tasks found")
-	}
-	if len(t.tasks) <= taskId {
-		return errors.New("No task for id found")
-	}
-	newTasks := make([]*Task, 0)
-	for i, task := range t.tasks {
-		if i != taskId {
-			newTasks = append(newTasks, task)
-		}
-	}
-	t.tasks = newTasks
-	return nil
-}
-
-func (t *TaskList) Edit(taskId int, newDescription string) error {
-	if t.tasks == nil {
-		return errors.New("No tasks found")
-	}
-	if len(t.tasks) <= taskId {
-		return errors.New("No task for id found")
-	}
-	t.tasks[taskId].description = newDescription
-	return nil
-}
-
-func (t *TaskList) MarshalText() ([]byte, error) {
-	list := make([]string, 0)
-	for _, task := range t.tasks {
-		list = append(list, task.description)
-	}
-	return []byte(strings.Join(list, "\n")), nil
-}
-
-func (t *TaskList) UnmarshalText(text []byte) error {
-	in := string(text)
-	list := strings.Split(in, "\n")
-
-	t.tasks = make([]*Task, 0)
-	for _, taskDescription := range list {
-		if taskDescription != "" {
-			task := Task{description: taskDescription, updated: time.Now()}
-			t.tasks = append(t.tasks, &task)
-		}
-	}
-	return nil
-}
-
-var tasklist *TaskList
-var taskFilePath string
-
-func main() {
-	tasklist = &(TaskList{})
-	var err error
-	taskFilePath, err = getTaskFilePath()
-	if err != nil {
-		fmt.Print(err.Error())
-	}
-	file, err := os.Open(taskFilePath)
-	defer file.Close()
-	if file != nil {
-		taskBytes, err := ioutil.ReadAll(file)
-		if err != nil {
-			fmt.Print(err.Error())
-		}
-		err = tasklist.UnmarshalText(taskBytes)
-		if err != nil {
-			fmt.Print(err.Error())
-		}
-	}
-	finishFlag := flag.Int("f", -1, "-f 1")
-	editFlag := flag.Int("e", -1, "-e 1 newDesc")
-
-	flag.Parse()
-
-	if *finishFlag != -1 {
-		tasklist.Finish(*finishFlag)
-		err = write(tasklist)
-		if err != nil {
-			fmt.Print(err.Error())
-		}
-	} else if *editFlag != -1 {
-		if flag.NArg() != 0 {
-			tasklist.Edit(*editFlag, strings.Join(flag.Args(), " "))
-			err = write(tasklist)
-			if err != nil {
-				fmt.Print(err.Error())
+// Parse a taskline (from a task file) and return a task.
+//
+// A taskline should be in the format:
+//
+// summary text ... | meta1:meta1_value,meta2:meta2_value,...
+//
+// The task returned will be a dictionary such as:
+//
+// { 'id': <hash id>,
+// 'text': <summary text>,
+// ... other metadata ... }
+//
+// A taskline can also consist of only summary text, in which case the id
+// and other metadata will be generated when the line is read.  This is
+// supported to enable editing of the taskfile with a simple text editor.
+func task_from_taskline(taskline string) map[string]string {
+	task := make(map[string]string)
+	if strings.HasPrefix(strings.TrimSpace(taskline), "#") {
+		return nil
+	} else if strings.Contains(taskline, "|") {
+		sepIndex := strings.LastIndex(taskline, "|")
+		text := taskline[:sepIndex]
+		meta := taskline[sepIndex+1:]
+		task["text"] = strings.TrimSpace(text)
+		for _, piece := range strings.Split(strings.TrimSpace(meta), ",") {
+			metaSplit := strings.Split(piece, ":")
+			var label, data string
+			for i, m := range metaSplit {
+				if i == 0 {
+					label = strings.TrimSpace(m)
+				} else if i == 1 {
+					data = strings.TrimSpace(m)
+				}
 			}
-		} else {
-			fmt.Println("No new description given")
-		}
-	} else if flag.NArg() == 0 {
-		for _, task := range tasklist.List() {
-			fmt.Println(task)
-		}
-	} else if flag.NArg() == 1 {
-		tasklist.Add(flag.Arg(0))
-		err = write(tasklist)
-		if err != nil {
-			fmt.Print(err.Error())
+			task[label] = data
 		}
 	} else {
-		fmt.Println("NOTHING TO DO?!?")
+		text := strings.TrimSpace(taskline)
+		task["id"] = hash(text)
+		task["text"] = text
 	}
+	return task
 }
 
-func write(tasklist *TaskList) error {
-	marshaledList, _ := tasklist.MarshalText()
-	err := ioutil.WriteFile(taskFilePath, marshaledList, 0755)
-	if err != nil {
-		return err
-	}
-	return nil
-}
+// Parse a list of tasks into tasklines suitable for writing.
+func tasklines_from_tasks(tasks map[string]map[string]string) []string {
+	tasklines := make([]string, 0)
 
-func getTaskFilePath() (string, error) {
-	tasksFilePath := os.Getenv("T_TASKS_FILE")
-	if tasksFilePath == "" {
-		user, err := user.Current()
-		if err != nil {
-			return "", nil
+	for _, task := range tasks {
+		meta := make([][]string, 0)
+		for k, v := range task {
+			if k != "text" {
+				meta = append(meta, []string{k, v})
+			}
 		}
-		tasksFilePath = user.HomeDir + "/tasks"
+		meta_str := ""
+		for _, m := range meta {
+			if len(meta_str) > 0 {
+				meta_str = meta_str + ", "
+			}
+			meta_str = meta_str + fmt.Sprintf("%s:%s", m[0], m[1])
+		}
+		tasklines = append(tasklines, fmt.Sprintf("%s | %s\n", task["text"], meta_str))
 	}
-	return tasksFilePath, nil
+
+	return tasklines
 }
+
+// Return a mapping of ids to prefixes in O(n) time.
+//
+// Each prefix will be the shortest possible substring of the ID that
+// can uniquely identify it among the given group of IDs.
+//
+// If an ID of one task is entirely a substring of another task's ID, the
+// entire ID will be the prefix.
+func prefixes(tasks map[string]map[string]string) map[string]string {
+	ids := make([]string, 0)
+	for _, task := range tasks {
+		ids = append(ids, task["id"])
+	}
+	ps := make(map[string]string)
+	var prefix string
+	for _, id := range ids {
+		id_len := len(id)
+		i := 1
+		for ; i < id_len+1; i++ {
+			// identifies an empty prefix slot, or a singular collision
+			prefix = id[:i]
+			if ps_prefix, in_ps := ps[prefix]; !in_ps || (ps_prefix != prefix) {
+				break
+			}
+		}
+		if other_id, in_ps := ps[prefix]; in_ps {
+			// if there is a collision
+			for j := i; j < id_len+1; j++ {
+				if other_id[:j] == id[:j] {
+					ps[id[:j]] = ""
+				} else {
+					ps[other_id[:j]] = other_id
+					ps[id[:j]] = id
+					break
+				}
+			}
+			ps[other_id[:id_len+1]] = other_id
+			ps[id] = id
+		} else {
+			// no collision, can safely add
+			ps[prefix] = id
+		}
+	}
+	ps_swapped := make(map[string]string)
+	for k, v := range ps {
+		ps_swapped[v] = k
+	}
+	delete(ps_swapped, "")
+	return ps_swapped
+}
+
+// A set of tasks, both finished and unfinished, for a given list.
+//
+// The list's files are read from disk when the TaskDict is initialized. They
+// can be written back out to disk with the write() function.
+//
+type TaskDict struct {
+	tasks, done   map[string]map[string]string
+	name, taskdir string
+}
+
+func (t *TaskDict) tasksForKind(kind string) map[string]map[string]string {
+	if kind == "tasks" {
+		return t.tasks
+	} else if kind == "done" {
+		return t.done
+	} else {
+		panic("No such kind: '" + kind + "'")
+	}
+}
+
+// Initialize by reading the task files, if they exist.
+func NewTaskDict(taskdir string, name string) *TaskDict {
+	taskDict := TaskDict{}
+	taskDict.tasks = make(map[string]map[string]string)
+	taskDict.done = make(map[string]map[string]string)
+	if name == "" {
+		name = "tasks"
+	}
+	taskDict.name = name
+	if taskdir == "" {
+		taskdir = "."
+	}
+	taskDict.taskdir = taskdir
+	filemap := map[string]string{"tasks": taskDict.name, "done": fmt.Sprintf(".%s.done", taskDict.name)}
+	for kind, filename := range filemap {
+		path := path.Join(taskDict.taskdir, filename)
+		fileinfo, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			break
+		}
+		if fileinfo.IsDir() {
+			panic(fmt.Errorf(InvalidTaskfile, path))
+		}
+		file, err := os.Open(path)
+		defer file.Close()
+		if err != nil {
+			panic(err)
+		}
+		fileBytes, err := ioutil.ReadAll(file)
+		if err != nil {
+			panic(err)
+		}
+		fileLines := string(fileBytes)
+		for _, line := range strings.Split(fileLines, "\n") {
+			if line != "" {
+				task := task_from_taskline(strings.TrimSpace(line))
+				if task != nil {
+					tasks := taskDict.tasksForKind(kind)
+					tasks[task["id"]] = task
+				}
+			}
+		}
+	}
+	return &taskDict
+}
+
+// Return the unfinished task with the given prefix.
+//
+// If more than one task matches the prefix an AmbiguousPrefix exception
+// will be raised, unless the prefix is the entire ID of one task.
+//
+// If no tasks match the prefix an UnknownPrefix exception will be raised.
+func (t *TaskDict) getItem(prefix string) map[string]string {
+	matched := make([]string, 0)
+	for k, _ := range t.tasks {
+		if strings.HasPrefix(k, prefix) {
+			matched = append(matched, k)
+		}
+	}
+	if len(matched) == 1 {
+		return t.tasks[matched[0]]
+	} else if len(matched) == 0 {
+		panic(NewUnknownPrefixError(prefix))
+	} else {
+		matched = make([]string, 0)
+		for k, _ := range t.tasks {
+			if k == prefix {
+				matched = append(matched, k)
+			}
+		}
+		if len(matched) == 1 {
+			return t.tasks[matched[0]]
+		} else {
+			panic(NewAmbiguousPrefixError(prefix))
+		}
+	}
+}
+
+// Add a new, unfinished task with the given summary text.
+func (t *TaskDict) add_task(text string) {
+	task_id := hash(text)
+	t.tasks[task_id] = map[string]string{"id": task_id, "text": text}
+}
+
+// Edit the task with the given prefix.
+//
+// If more than one task matches the prefix an AmbiguousPrefix exception
+// will be raised, unless the prefix is the entire ID of one task.
+//
+// If no tasks match the prefix an UnknownPrefix exception will be raised.
+func (t *TaskDict) edit_task(prefix, text string) {
+	task := t.getItem(prefix)
+	if strings.HasPrefix(text, "s/") || strings.HasPrefix(text, "/") {
+		text := strings.TrimSpace(regexp.MustCompile("^s?/").ReplaceAllLiteralString(text, ""))
+		i := strings.Index(text, "/")
+		find := text[:i]
+		repl := text[i+1:]
+		text = strings.Replace(task["text"], find, repl, 0)
+	}
+	task["text"] = text
+}
+
+// Mark the task with the given prefix as finished.
+//
+// If more than one task matches the prefix an AmbiguousPrefix exception
+// will be raised, if no tasks match it an UnknownPrefix exception will
+// be raised.
+func (t *TaskDict) finish_task(prefix string) {
+	id := t.getItem(prefix)["id"]
+	if task, ok := t.tasks[id]; ok {
+		delete(t.tasks, id)
+		t.done[task["id"]] = task
+	}
+}
+
+// Remove the task from tasks list.
+//
+// If more than one task matches the prefix an AmbiguousPrefix exception
+// will be raised, if no tasks match it an UnknownPrefix exception will
+// be raised.
+func (t *TaskDict) remove_task(prefix string) {
+	delete(t.tasks, t.getItem(prefix)["id"])
+}
+
+// Print out a nicely formatted list of unfinished tasks.
+func (t *TaskDict) print_list(kind string, verbose bool, quiet bool, grep string) {
+	if kind == "" {
+		kind = "tasks"
+	}
+	tasks := t.tasksForKind(kind)
+	label := "prefix"
+	if verbose {
+		label = "id"
+	}
+
+	if !verbose {
+		for task_id, prefix := range prefixes(tasks) {
+			tasks[task_id]["prefix"] = prefix
+		}
+	}
+	var keys []string
+	for k := range tasks {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	plen := 0
+	if len(tasks) > 0 {
+		var keyLength []int
+		for _, task := range tasks {
+			keyLength = append(keyLength, len(task[label]))
+		}
+		sort.Ints(keyLength)
+		plen = keyLength[len(keyLength)-1]
+	}
+	for _, sortedKey := range keys {
+		task := tasks[sortedKey]
+		if strings.Contains(strings.ToLower(task["text"]), strings.ToLower(grep)) {
+			p := ""
+			if !quiet {
+				template := fmt.Sprintf("%%%ds - ", plen)
+				p = fmt.Sprintf(template, task[label])
+			}
+			fmt.Println(p + task["text"])
+		}
+	}
+}
+
+// Flush the finished and unfinished tasks to the files on disk.
+func (t *TaskDict) write(delete_if_empty bool) {
+	filemap := map[string]string{"tasks": t.name, "done": fmt.Sprintf(".%s.done", t.name)}
+	for kind, filename := range filemap {
+		path := path.Join(t.taskdir, filename)
+		fileInfo, err := os.Stat(path)
+		if !os.IsNotExist(err) {
+			if fileInfo.IsDir() {
+				panic(fmt.Errorf(InvalidTaskfile, path))
+			}
+		}
+		tasks := t.tasksForKind(kind)
+		var ids []string
+		for _, v := range tasks {
+			ids = append(ids, v["id"])
+		}
+		sort.Strings(ids)
+		if len(tasks) > 0 || !delete_if_empty {
+			tasklines := tasklines_from_tasks(tasks)
+			data := []byte(strings.Join(tasklines, "\n"))
+			err = ioutil.WriteFile(path, data, 0755)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					panic(err)
+				}
+			}
+		} else if len(tasks) == 0 && !fileInfo.IsDir() {
+			os.Remove(path)
+		}
+	}
+}
+
+type parser struct {
+	*flag.FlagSet
+	edit          string
+	finish        string
+	remove        string
+	list          string
+	taskdir       string
+	deleteIfEmpty bool
+	grep          string
+	verbose       bool
+	quiet         bool
+	done          bool
+}
+
+func (p *parser) parse_args() (parser *parser, args []string) {
+	err := p.Parse(os.Args[1:])
+	if err != nil {
+		panic(err)
+	}
+	return p, p.Args()
+}
+
+// Return a parser for the command-line interface.
+func build_parser() *parser {
+	//usage := "Usage: %prog [-t DIR] [-l LIST] [options] [TEXT]"
+	parser := parser{FlagSet: flag.CommandLine}
+
+	parser.StringVar(&parser.edit, "e", "", "edit TASK to contain TEXT")
+	parser.StringVar(&parser.edit, "edit", "", "edit TASK to contain TEXT")
+	parser.StringVar(&parser.finish, "f", "", "mark TASK as finished")
+	parser.StringVar(&parser.finish, "finish", "", "mark TASK as finished")
+	parser.StringVar(&parser.remove, "r", "", "Remove TASK from list")
+	parser.StringVar(&parser.remove, "remove", "", "Remove TASK from list")
+
+	parser.StringVar(&parser.list, "l", "", "work on LIST")
+	parser.StringVar(&parser.list, "list", "", "work on LIST")
+	parser.StringVar(&parser.taskdir, "t", "", "work on the lists in DIR")
+	parser.StringVar(&parser.taskdir, "task-dir", "", "work on the lists in DIR")
+	parser.BoolVar(&parser.deleteIfEmpty, "d", false, "delete the task file if it becomes empty")
+	parser.BoolVar(&parser.deleteIfEmpty, "delete-if-empty", false, "delete the task file if it becomes empty")
+
+	parser.StringVar(&parser.grep, "g", "", "print only tasks that contain WORD")
+	parser.StringVar(&parser.grep, "grep", "", "print only tasks that contain WORD")
+	parser.BoolVar(&parser.verbose, "v", false, "print more detailed output (full task ids, etc)")
+	parser.BoolVar(&parser.verbose, "verbose", false, "print more detailed output (full task ids, etc)")
+	parser.BoolVar(&parser.quiet, "q", false, "print less detailed output (no task ids, etc)")
+	parser.BoolVar(&parser.quiet, "quiet", false, "print less detailed output (no task ids, etc)")
+	parser.BoolVar(&parser.done, "done", false, "list done tasks instead of unfinished ones")
+
+	return &parser
+}
+
+// Run the command-line interface.
+func main() {
+	options, args := build_parser().parse_args()
+
+	td := NewTaskDict(options.taskdir, options.list)
+	text := strings.TrimSpace(strings.Join(args, " "))
+
+	defer func() {
+		if e := recover(); e != nil {
+			if err, ok := e.(AmbiguousPrefixError); ok {
+				fmt.Fprintf(os.Stderr, `The ID "%s" matches more than one task.\n`, err.prefix)
+			} else if err, ok := e.(UnknownPrefixError); ok {
+				fmt.Fprintf(os.Stderr, `The ID "%s" does not match any task.\n`, err.prefix)
+			} else {
+				fmt.Fprint(os.Stderr, e)
+			}
+		}
+	}()
+
+	if options.finish != "" {
+		td.finish_task(options.finish)
+		td.write(options.deleteIfEmpty)
+	} else if options.remove != "" {
+		td.remove_task(options.remove)
+		td.write(options.deleteIfEmpty)
+	} else if options.edit != "" {
+		td.edit_task(options.edit, text)
+		td.write(options.deleteIfEmpty)
+	} else if text != "" {
+		td.add_task(text)
+		td.write(options.deleteIfEmpty)
+	} else {
+		kind := "tasks"
+		if options.done {
+			kind = "done"
+		}
+		td.print_list(kind, options.verbose, options.quiet, options.grep)
+	}
+}
+
+//
+//
+//if __name__ == '__main__':
+//    _main()
