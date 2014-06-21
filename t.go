@@ -17,30 +17,10 @@ import (
 var InvalidTaskfile string = "Invalid task file: '%s'"
 
 // Raised when trying to use a prefix that could identify multiple tasks.
-type AmbiguousPrefixError struct {
-	prefix string
-}
-
-func (e *AmbiguousPrefixError) Error() string {
-	return "Ambiguous Prefix '" + e.prefix + "'"
-}
-
-func NewAmbiguousPrefixError(prefix string) *AmbiguousPrefixError {
-	return &AmbiguousPrefixError{prefix}
-}
+type AmbiguousPrefix string
 
 // Raised when trying to use a prefix that does not match any tasks.
-type UnknownPrefixError struct {
-	prefix string
-}
-
-func (e *UnknownPrefixError) Error() string {
-	return "Unknown Prefix '" + e.prefix + "'"
-}
-
-func NewUnknownPrefixError(prefix string) *UnknownPrefixError {
-	return &UnknownPrefixError{prefix}
-}
+type UnknownPrefix string
 
 // Return a hash of the given text for use as an id.
 // Currently SHA1 hashing is used.  It should be plenty for our purposes.
@@ -250,7 +230,7 @@ func (t *TaskDict) getItem(prefix string) map[string]string {
 	if len(matched) == 1 {
 		return t.tasks[matched[0]]
 	} else if len(matched) == 0 {
-		panic(NewUnknownPrefixError(prefix))
+		panic(UnknownPrefix(prefix))
 	} else {
 		matched = make([]string, 0)
 		for k, _ := range t.tasks {
@@ -261,7 +241,7 @@ func (t *TaskDict) getItem(prefix string) map[string]string {
 		if len(matched) == 1 {
 			return t.tasks[matched[0]]
 		} else {
-			panic(NewAmbiguousPrefixError(prefix))
+			panic(AmbiguousPrefix(prefix))
 		}
 	}
 }
@@ -347,7 +327,7 @@ func (t *TaskDict) print_list(kind string, verbose bool, quiet bool, grep string
 		if strings.Contains(strings.ToLower(task["text"]), strings.ToLower(grep)) {
 			p := ""
 			if !quiet {
-				template := fmt.Sprintf("%%%ds - ", plen)
+				template := fmt.Sprintf("%%-%ds - ", plen)
 				p = fmt.Sprintf(template, task[label])
 			}
 			fmt.Println(p + task["text"])
@@ -448,10 +428,10 @@ func main() {
 
 	defer func() {
 		if e := recover(); e != nil {
-			if err, ok := e.(AmbiguousPrefixError); ok {
-				fmt.Fprintf(os.Stderr, `The ID "%s" matches more than one task.\n`, err.prefix)
-			} else if err, ok := e.(UnknownPrefixError); ok {
-				fmt.Fprintf(os.Stderr, `The ID "%s" does not match any task.\n`, err.prefix)
+			if err, ok := e.(AmbiguousPrefix); ok {
+				fmt.Fprintf(os.Stderr, `The ID "%s" matches more than one task.`+"\n", err)
+			} else if err, ok := e.(UnknownPrefix); ok {
+				fmt.Fprintf(os.Stderr, `The ID "%s" does not match any task.`+"\n", err)
 			} else {
 				fmt.Fprint(os.Stderr, e)
 			}
