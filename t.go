@@ -110,34 +110,59 @@ func prefixes(tasks map[string]map[string]string) map[string]string {
 	for _, task := range tasks {
 		ids = append(ids, task["id"])
 	}
+	sort.Strings(ids)
 	ps := make(map[string]string)
-	var prefix string
 	for _, id := range ids {
-		id_len := len(id)
-		i := 1
-		for ; i < id_len+1; i++ {
-			// identifies an empty prefix slot, or a singular collision
-			prefix = id[:i]
-			if ps_prefix, in_ps := ps[prefix]; !in_ps || (ps_prefix != prefix) {
+		for i := 1; i <= len(id); i++ {
+			if _, ok := ps[id[:i]]; !ok {
+				// empty slot, insert.
+				ps[id[:i]] = id
 				break
 			}
-		}
-		if other_id, in_ps := ps[prefix]; in_ps {
-			// if there is a collision
-			for j := i; j < id_len+1; j++ {
-				if other_id[:j] == id[:j] {
-					ps[id[:j]] = ""
-				} else {
-					ps[other_id[:j]] = other_id
-					ps[id[:j]] = id
-					break
-				}
+			if _, ok := ps[id[:i]]; ok {
+				// TODO/FIXME: The idea behind t.py is, that there are not so many ambiguity
+				// between hashes. That means:
+				// ------------------
+				// | id     | ef25a |
+				// ------------------
+				// | prefix | e     |
+				// ------------------
+				// adding id 'eg35e'
+				// --------------------------
+				// | id     | ef25a | eg35e |
+				// --------------------------
+				// | prefix | e     | eg    | WRONG
+				// --------------------------
+				// | prefix | ef	| eg	| RIGHT
+				// --------------------------
+				// adding id 'eg2d1'
+				// ----------------------------------
+				// | id     | ef25a | eg35e | eg2d1 |
+				// ----------------------------------
+				// | prefix | e     | eg    | eg    | WRONG
+				// ----------------------------------
+				// | prefix | ef	| eg	| eg2	| WRONG
+				// ----------------------------------
+				// | prefix | ef2	| eg3	| eg2	| RIGHT
+				// ----------------------------------
+				// adding id 'ebcd1'
+				// ------------------------------------------
+				// | id     | ef25a | eg35e | eg2d1 | ebcd1 |
+				// ------------------------------------------
+				// | prefix | e     | eg    | eg    | eg    | WRONG
+				// ------------------------------------------
+				// | prefix | ef	| eg	| eg2	| eg2	| WRONG
+				// ------------------------------------------
+				// | prefix | ef2	| eg3	| eg2	| eg2	| WRONG
+				// ------------------------------------------
+				// | prefix | ef25	| eg35	| eg2d	| ebcd	| RIGHT
+				// ------------------------------------------
+				// That means each prefix, whose id starts with the same bytes as another id has to be
+				// count(same_id_start_bytes) long
+				//
+				// slot already in use
+				continue
 			}
-			ps[other_id[:id_len+1]] = other_id
-			ps[id] = id
-		} else {
-			// no collision, can safely add
-			ps[prefix] = id
 		}
 	}
 	ps_swapped := make(map[string]string)
