@@ -21,18 +21,18 @@ type TaskList struct {
 	tasks []*Task
 }
 
-func (t *TaskList) Len() int {
-	return len(t.tasks)
+type ByDate []*Task
+
+func (b ByDate) Len() int {
+	return len(b)
 }
 
-func (t *TaskList) Less(i, j int) bool {
-	return t.tasks[i].updated.After(t.tasks[j].updated)
+func (b ByDate) Less(i, j int) bool {
+	return b[i].updated.After(b[j].updated)
 }
 
-func (t *TaskList) Swap(i, j int) {
-	iVal := t.tasks[i]
-	t.tasks[i] = t.tasks[j]
-	t.tasks[j] = iVal
+func (b ByDate) Swap(i, j int) {
+	b[i], b[j] = b[j], b[i]
 }
 
 func (t *TaskList) Add(taskDescription string) {
@@ -44,7 +44,11 @@ func (t *TaskList) Add(taskDescription string) {
 }
 
 func (t *TaskList) List() []string {
-	sort.Sort(t)
+	tasks := make([]*Task, 0)
+	for _, t := range t.tasks {
+		tasks = append(tasks, t)
+	}
+	sort.Sort(ByDate(tasks))
 	list := make([]string, 0)
 	for i, task := range t.tasks {
 		list = append(list, fmt.Sprintf("%d - %s", i, task.description))
