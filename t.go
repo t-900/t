@@ -150,10 +150,7 @@ func (t *TaskList) write(deleteIfEmpty bool) error {
 func getTaskFilePath() (string, error) {
 	tasksFilePath := os.Getenv("T_TASKS_FILE")
 	if tasksFilePath == "" {
-		user, err := user.Current()
-		if err != nil {
-			return "", nil
-		}
+		user, _ := user.Current()
 		tasksFilePath = user.HomeDir + "/tasks"
 	}
 	return tasksFilePath, nil
