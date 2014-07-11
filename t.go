@@ -73,23 +73,6 @@ func (t *TaskList) Finish(taskId int) error {
 	return nil
 }
 
-func (t *TaskList) Remove(taskId int) error {
-	if t.tasks == nil {
-		return errors.New("No tasks found")
-	}
-	if len(t.tasks) <= taskId {
-		return errors.New("No task for id found")
-	}
-	newTasks := make([]*Task, 0)
-	for i, task := range t.tasks {
-		if i != taskId {
-			newTasks = append(newTasks, task)
-		}
-	}
-	t.tasks = newTasks
-	return nil
-}
-
 func (t *TaskList) Edit(taskId int, newDescription string) error {
 	if t.tasks == nil {
 		return errors.New("No tasks found")
@@ -126,67 +109,21 @@ func (t *TaskList) UnmarshalText(text []byte) error {
 var tasklist *TaskList
 var taskFilePath string
 
-type parser struct {
-	*flag.FlagSet
-	edit          int
-	finish        int
-	remove        int
-	list          string
-	taskdir       string
-	deleteIfEmpty bool
-	grep          string
-	verbose       bool
-	quiet         bool
-	done          bool
-}
-
-func (p *parser) parseArgs() (parser *parser, args []string) {
-	err := p.Parse(os.Args[1:])
-	if err != nil {
-		panic(err)
-	}
-	return p, p.Args()
-}
-
-// Return a parser for the command-line interface.
-func build_parser() *parser {
-	//usage := "Usage: %prog [-t DIR] [-l LIST] [options] [TEXT]"
-	parser := parser{FlagSet: flag.CommandLine}
-
-	parser.IntVar(&parser.edit, "e", -1, "edit TASK to contain TEXT")
-	parser.IntVar(&parser.edit, "edit", -1, "edit TASK to contain TEXT")
-	parser.IntVar(&parser.finish, "f", -1, "mark TASK as finished")
-	parser.IntVar(&parser.finish, "finish", -1, "mark TASK as finished")
-	parser.IntVar(&parser.remove, "r", -1, "Remove TASK from list")
-	parser.IntVar(&parser.remove, "remove", -1, "Remove TASK from list")
-
-	parser.StringVar(&parser.list, "l", "", "work on LIST")
-	parser.StringVar(&parser.list, "list", "", "work on LIST")
-	parser.StringVar(&parser.taskdir, "t", "", "work on the lists in DIR")
-	parser.StringVar(&parser.taskdir, "task-dir", "", "work on the lists in DIR")
-	parser.BoolVar(&parser.deleteIfEmpty, "d", false, "delete the task file if it becomes empty")
-	parser.BoolVar(&parser.deleteIfEmpty, "delete-if-empty", false, "delete the task file if it becomes empty")
-
-	parser.StringVar(&parser.grep, "g", "", "print only tasks that contain WORD")
-	parser.StringVar(&parser.grep, "grep", "", "print only tasks that contain WORD")
-	parser.BoolVar(&parser.verbose, "v", false, "print more detailed output (full task ids, etc)")
-	parser.BoolVar(&parser.verbose, "verbose", false, "print more detailed output (full task ids, etc)")
-	parser.BoolVar(&parser.quiet, "q", false, "print less detailed output (no task ids, etc)")
-	parser.BoolVar(&parser.quiet, "quiet", false, "print less detailed output (no task ids, etc)")
-	parser.BoolVar(&parser.done, "done", false, "list done tasks instead of unfinished ones")
-
-	return &parser
-}
-
 func main() {
-	options, args := build_parser().parseArgs()
-	text := strings.TrimSpace(strings.Join(args, " "))
+	var (
+		editTask   = flag.Int("e", -1, "edit the tasklist")
+		finishTask = flag.Int("f", -1, "finish task #")
+	)
+
+	flag.Parse()
+
 	tasklist = &(TaskList{})
 	var err error
 	taskFilePath, err = getTaskFilePath()
 	if err != nil {
 		fmt.Print(err.Error())
 	}
+
 	file, err := os.Open(taskFilePath)
 	defer file.Close()
 	if file != nil {
@@ -199,21 +136,22 @@ func main() {
 			fmt.Print(err.Error())
 		}
 	}
-	if options.finish != -1 {
-		tasklist.Finish(options.finish)
-		tasklist.write(options.deleteIfEmpty)
-	} else if options.remove != -1 {
-		tasklist.Remove(options.remove)
-		tasklist.write(options.deleteIfEmpty)
-	} else if options.edit != -1 {
-		tasklist.Edit(options.edit, text)
-		tasklist.write(options.deleteIfEmpty)
-	} else if text != "" {
-		tasklist.Add(text)
-		tasklist.write(options.deleteIfEmpty)
+
+	text := strings.Join(flag.Args(), " ")
+	if *editTask != -1 {
+		tasklist.Edit(*editTask, text)
+		tasklist.write(true)
+	} else if *finishTask != -1 {
+		tasklist.Finish(*finishTask)
+		tasklist.write(true)
 	} else {
-		for _, task := range tasklist.List() {
-			fmt.Println(task)
+		if len(flag.Args()) > 0 {
+			tasklist.Add(text)
+			tasklist.write(true)
+		} else {
+			for _, task := range tasklist.List() {
+				fmt.Println(task)
+			}
 		}
 	}
 }
