@@ -7,39 +7,22 @@ import (
 	"io/ioutil"
 	"os"
 	"os/user"
-	"sort"
 	"strings"
-	"time"
 )
 
 type Task struct {
 	description string
-	updated     time.Time
 }
 
 type TaskList struct {
 	tasks []*Task
 }
 
-type ByDate []*Task
-
-func (b ByDate) Len() int {
-	return len(b)
-}
-
-func (b ByDate) Less(i, j int) bool {
-	return b[i].updated.After(b[j].updated)
-}
-
-func (b ByDate) Swap(i, j int) {
-	b[i], b[j] = b[j], b[i]
-}
-
 func (t *TaskList) Add(taskDescription string) {
 	if t.tasks == nil {
 		t.tasks = make([]*Task, 0)
 	}
-	task := Task{description: taskDescription, updated: time.Now()}
+	task := Task{description: taskDescription}
 	t.tasks = append(t.tasks, &task)
 }
 
@@ -48,7 +31,6 @@ func (t *TaskList) List() []string {
 	for _, t := range t.tasks {
 		tasks = append(tasks, t)
 	}
-	sort.Sort(ByDate(tasks))
 	list := make([]string, 0)
 	for i, task := range t.tasks {
 		list = append(list, fmt.Sprintf("%d - %s", i, task.description))
@@ -99,7 +81,7 @@ func (t *TaskList) UnmarshalText(text []byte) error {
 	t.tasks = make([]*Task, 0)
 	for _, taskDescription := range list {
 		if taskDescription != "" {
-			task := Task{description: taskDescription, updated: time.Now()}
+			task := Task{description: taskDescription}
 			t.tasks = append(t.tasks, &task)
 		}
 	}
