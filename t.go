@@ -100,13 +100,12 @@ func main() {
 	flag.Parse()
 
 	tasklist = &(TaskList{})
-	var err error
-	taskFilePath, err = getTaskFilePath()
-	if err != nil {
-		fmt.Print(err.Error())
-	}
+	taskFilePath = getTaskFilePath()
 
 	file, err := os.Open(taskFilePath)
+	if err != nil {
+		fmt.Print(err)
+	}
 	defer file.Close()
 	if file != nil {
 		taskBytes, err := ioutil.ReadAll(file)
@@ -147,11 +146,11 @@ func (t *TaskList) write(deleteIfEmpty bool) error {
 	return nil
 }
 
-func getTaskFilePath() (string, error) {
+func getTaskFilePath() string {
 	tasksFilePath := os.Getenv("T_TASKS_FILE")
 	if tasksFilePath == "" {
 		user, _ := user.Current()
 		tasksFilePath = user.HomeDir + "/tasks"
 	}
-	return tasksFilePath, nil
+	return tasksFilePath
 }
