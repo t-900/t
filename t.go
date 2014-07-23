@@ -104,7 +104,9 @@ func main() {
 
 	file, err := os.Open(taskFilePath)
 	if err != nil {
-		fmt.Print(err)
+		if !os.IsNotExist(err) {
+			fmt.Print(err)
+		}
 	}
 	defer file.Close()
 	if file != nil {
