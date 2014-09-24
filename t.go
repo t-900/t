@@ -141,7 +141,7 @@ func main() {
 
 func (t *TaskList) write(deleteIfEmpty bool) error {
 	marshaledList, _ := tasklist.MarshalText()
-	err := ioutil.WriteFile(taskFilePath, marshaledList, 0755)
+	err := ioutil.WriteFile(taskFilePath, marshaledList, 0644)
 	if err != nil {
 		return err
 	}
