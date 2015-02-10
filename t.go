@@ -91,7 +91,26 @@ func (t *TaskList) UnmarshalText(text []byte) error {
 var tasklist *TaskList
 var taskFilePath string
 
+var helpText string = `t manages tasks in your command line
+
+Usage:
+
+List all tasks:
+  t
+Add task:
+  t "Buy milk"
+Edit a given task:
+  t -e 0 "Buy two milk bottles"
+Finish a task:
+  t -f 0
+`
+
+func usage() {
+	fmt.Printf("%s", helpText)
+}
+
 func main() {
+	flag.Usage = usage
 	var (
 		editTask   = flag.Int("e", -1, "edit the tasklist")
 		finishTask = flag.Int("f", -1, "finish task #")
